@@ -4,7 +4,7 @@ class Build_Corpus:
         pass
     def read_pdf(document: str) -> str:
         reader = pymupdf.open(document)
-        doc = ""
+        doc = str()
         for page in reader:
-            doc += page.get_text()
+            doc += str(page.get_text())
         return doc
