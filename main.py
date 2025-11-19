@@ -99,6 +99,7 @@ class Database:
         )
         return vectorstore
 
+
 class LLM:
     def __init__(self, model_id: str, vectorstore: Chroma) -> None:
         """
@@ -126,9 +127,7 @@ class LLM:
         print(chain.invoke({"question": question}))
 
     def get_context(self, question: str) -> str:
-        """
-        use vectorstore to retrieve additional context for prompt
-        """
+        """use vectorstore to retrieve additional context for prompt"""
         retrieved_docs = self.retrieve.invoke(question)
         docs_content = "\n\n".join(doc.page_content for doc in retrieved_docs)
         system_prompt = (
@@ -140,8 +139,6 @@ class LLM:
         return system_prompt
 
 
-       
-
 if __name__ == "__main__":
     db = Database()
     # corpus = db.collect_data()
@@ -152,5 +149,4 @@ if __name__ == "__main__":
     vectorstore = db.create_vectorstore()
     llm = LLM("Qwen/Qwen3-0.6B", vectorstore=vectorstore)
     llm.prompt("What is nosql?")
-
 
