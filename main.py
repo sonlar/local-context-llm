@@ -1,15 +1,15 @@
-import chromadb
 import os
+
+import chromadb
 import langchain_chroma
 import pymupdf
-
-from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
-from langchain_chroma import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
-
-from langchain_huggingface.llms import HuggingFacePipeline
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+
+from langchain_chroma import Chroma
 from langchain_core.prompts import PromptTemplate
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_huggingface.llms import HuggingFacePipeline
+
 
 class Build_Corpus:
     def __find_files(self, path: str) -> list:
@@ -99,9 +99,9 @@ class Database:
         )
         return vectorstore
 
-
 class LLM:
-        def __init__(self, model_id) -> None:
+        def __init__(self, model_id, vectorstore) -> None:
+            self.retrieve= vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 5, "fetch_k": 50})
             model_id = model_id
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             model = AutoModelForCausalLM.from_pretrained(model_id)
@@ -109,12 +109,25 @@ class LLM:
             self.hf = HuggingFacePipeline(pipeline=pipe)
 
         def prompt(self, question) -> None:
-            template = "Question: {question}"
-            prompt = PromptTemplate.from_template(template)
+            template = f"Question: {question}\n\n"
+            context = self.get_context(question)
+            prompt = PromptTemplate.from_template(template+context)
             chain = prompt | self.hf
-            question = question
             print(chain.invoke({"question": question}))
 
+        def get_context(self, question: str) -> str:
+            retrieved_docs = self.retrieve.invoke(question)
+            docs_content = "\n\n".join(doc.page_content for doc in retrieved_docs)
+            system_prompt = (
+            "Use the given context to answer the question.\n"
+            "If you don't know the answer, say you don't know.\n"
+            "Use three sentence maximum and keep the answer concise.\n"
+            f"Context: {docs_content}"
+            )
+            return system_prompt
+
+
+       
 
 if __name__ == "__main__":
     db = Database()
@@ -122,15 +135,9 @@ if __name__ == "__main__":
     # db.connect_to_db(persistent=True)
     # db.write_to_db(corpus)
     # db.read_db()
-    # db.query("nosql, sql, chroma, chromadb, vectors")
-
-    # llm = LLM("Qwen/Qwen3-0.6B")
-    # llm.prompt("What is nosql?")
 
     vectorstore = db.create_vectorstore()
-    print("\n")
-    retriever = vectorstore.as_retriever(
-        search_type="mmr", search_kwargs={"k": 5, "fetch_k": 5}
-    )
-    print(retriever.invoke("Tell me something about nosql"))
+    llm = LLM("Qwen/Qwen3-0.6B", vectorstore=vectorstore)
+    llm.prompt("What is nosql?")
+
 

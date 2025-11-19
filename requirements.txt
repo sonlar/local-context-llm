@@ -1,0 +1,9 @@
+chromadb
+PyMuPDF
+langchain
+langchain-chroma
+langchain-huggingface
+transformers
+sentence-transformers
+torch
+accelerate
