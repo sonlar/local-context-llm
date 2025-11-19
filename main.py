@@ -1,9 +1,15 @@
 import chromadb
-import keyword_spacy
 import os
+import langchain_chroma
 import pymupdf
-import spacy
 
+from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
+from langchain_chroma import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
+
+from langchain_huggingface.llms import HuggingFacePipeline
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+from langchain_core.prompts import PromptTemplate
 
 class Build_Corpus:
     def __find_files(self, path: str) -> list:
@@ -94,7 +100,20 @@ class Database:
         return vectorstore
 
 
+class LLM:
+        def __init__(self, model_id) -> None:
+            model_id = model_id
+            tokenizer = AutoTokenizer.from_pretrained(model_id)
+            model = AutoModelForCausalLM.from_pretrained(model_id)
+            pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, max_new_tokens=200)
+            self.hf = HuggingFacePipeline(pipeline=pipe)
 
+        def prompt(self, question) -> None:
+            template = "Question: {question}"
+            prompt = PromptTemplate.from_template(template)
+            chain = prompt | self.hf
+            question = question
+            print(chain.invoke({"question": question}))
 
 
 if __name__ == "__main__":
@@ -104,6 +123,9 @@ if __name__ == "__main__":
     # db.write_to_db(corpus)
     # db.read_db()
     # db.query("nosql, sql, chroma, chromadb, vectors")
+
+    # llm = LLM("Qwen/Qwen3-0.6B")
+    # llm.prompt("What is nosql?")
 
     vectorstore = db.create_vectorstore()
     print("\n")
