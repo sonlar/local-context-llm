@@ -100,31 +100,44 @@ class Database:
         return vectorstore
 
 class LLM:
-        def __init__(self, model_id, vectorstore) -> None:
-            self.retrieve= vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 5, "fetch_k": 50})
-            model_id = model_id
-            tokenizer = AutoTokenizer.from_pretrained(model_id)
-            model = AutoModelForCausalLM.from_pretrained(model_id)
-            pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, max_new_tokens=200)
-            self.hf = HuggingFacePipeline(pipeline=pipe)
+    def __init__(self, model_id: str, vectorstore: Chroma) -> None:
+        """
+        Installs local LLM and builds pipeline
+        Expects two parameters:
+            model_id: str -> model name from huggingface
+            vectorstore: Chroma -> vectorstore from db
+        """
+        self.retrieve= vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 5, "fetch_k": 50})
+        model_id = model_id
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, max_new_tokens=200)
+        self.hf = HuggingFacePipeline(pipeline=pipe)
 
-        def prompt(self, question) -> None:
-            template = f"Question: {question}\n\n"
-            context = self.get_context(question)
-            prompt = PromptTemplate.from_template(template+context)
-            chain = prompt | self.hf
-            print(chain.invoke({"question": question}))
+    def prompt(self, question: str) -> None:
+        """
+        Expects question: str which is prompted to LLM
+        Calls on get_context which is appended to prompt
+        """
+        template = f"Question: {question}\n\n"
+        context = self.get_context(question)
+        prompt = PromptTemplate.from_template(template+context)
+        chain = prompt | self.hf
+        print(chain.invoke({"question": question}))
 
-        def get_context(self, question: str) -> str:
-            retrieved_docs = self.retrieve.invoke(question)
-            docs_content = "\n\n".join(doc.page_content for doc in retrieved_docs)
-            system_prompt = (
-            "Use the given context to answer the question.\n"
-            "If you don't know the answer, say you don't know.\n"
-            "Use three sentence maximum and keep the answer concise.\n"
-            f"Context: {docs_content}"
-            )
-            return system_prompt
+    def get_context(self, question: str) -> str:
+        """
+        use vectorstore to retrieve additional context for prompt
+        """
+        retrieved_docs = self.retrieve.invoke(question)
+        docs_content = "\n\n".join(doc.page_content for doc in retrieved_docs)
+        system_prompt = (
+        "Use the given context to answer the question.\n"
+        "If you don't know the answer, say you don't know.\n"
+        "Use three sentence maximum and keep the answer concise.\n"
+        f"Context: {docs_content}"
+        )
+        return system_prompt
 
 
        
