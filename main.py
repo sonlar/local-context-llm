@@ -47,7 +47,7 @@ class Build_Corpus:
 
 
 class Database:
-    def collect_data(self, path="./data/") -> list:
+    def collect_data(self, path: str = "./data/") -> list:
         """Extracts corpus from files to database"""
         extractor = Build_Corpus()
         corpus = extractor.extract(path=path)
