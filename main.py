@@ -10,43 +10,36 @@ class Build_Corpus:
         """Returns a list of files in the given path"""
         return os.listdir(path)
 
-    def __read_pdf(self, document: str) -> str:
+    def __read_pdf(self, document: str) -> list:
         """
         Attempts to read a given path/to/document,
         and returns the content of the given doc to the best of its abilities
         """
         try:
             reader = pymupdf.open(document)
-            doc = str()
+            doc = list()
             for page in reader:
-                doc += str(page.get_text())
+                doc.append(page.get_text())
             return doc
         except Exception:
             print(Exception)
-            return ""
-
-    def __extract_keywords(self, text: str ) -> list:
-        """Expects a text: str and returns a list of keywords that best describes it"""
-        nlp = spacy.load("en_core_web_md")
-        nlp.add_pipe("keyword_extractor", last=True, config={"top_n": 1, "min_ngram": 1, "max_ngram": 3, "strict": True})
-        doc = nlp(text)
-        return [word[0] for word in doc._.keywords]
+            return list()
 
     def extract(self, path: str) -> list:
         """
         Reads files in a given path
-        Returns a list of tuples: (file(name): str, text: str, keywords: list)
+        Returns a list of tuples: (filename-page_number: str, text: str, filename: str)
         """
         corpus = list()
         files = self.__find_files(path)
         for file in files:
+            filename, _ = os.path.splitext(file)
             text = self.__read_pdf(path+file)
-            keywords = self.__extract_keywords(text)
-            corpus.append((file, text, keywords))
+            for page_number, page in enumerate(text):
+                corpus.append((f"{filename}-{page_number}", page, filename))
         return corpus
 
 
-# TODO: Implement chroma db
 class Database:
     def collect_data(self, path="./data/") -> list:
         """Extracts corpus from files to database"""
@@ -73,37 +66,36 @@ class Database:
         Parameters: 
             corpus: list
                 Expects a list of tuples containing three values in the following order:
-                filename: str used as id in the collection
+                filename-page_number: str used as id in the collection
                 text: str content used to create embeddings
-                keywords: list can be used to filter queries
+                filename: list can be used to filter queries
             name: str name of collection we are creating/writing to
         """
-        file, text, keywords = zip(*corpus)
+        file, text, filename = zip(*corpus)
         self.collection = self.client.get_or_create_collection(name=name)
         self.collection.upsert(
             ids = list(file),
             documents=list(text),
-            metadatas = [{"keyword": str(keyword)} for keyword in keywords]
+            metadatas = [{"filename": str(name)} for name in filename]
         )
 
     def read_db(self, name: str = "my_collection") -> None:
         """Reads content of persistent collection"""
         self.collection = self.client.get_collection(name=name)
         
-
-    def query(self, query: str, n_results: int = 1) -> None:
-        """Returns the most relevant content"""
-        results = self.collection.query(query_texts=list(query), n_results=n_results)
-        ids_res = results["ids"][0]
-        dists = results["distances"][0]
-        docs_res = results["documents"][0]
-        metas = results["metadatas"][0]
-        for doc_id, dist, doc, meta in zip(ids_res, dists, docs_res, metas):
-            print(f"id:{doc_id}, dist:{dist}, metadata: {meta}, doc: {doc[:100]}") 
-
+    def create_vectorstore(self, name: str = "my_collection", path: str = "./chroma") -> Chroma:
+        """Create vectorstore for  LLM"""
+        embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        vectorstore = Chroma(
+            collection_name=name,
+            persist_directory=path,
+            embedding_function=embeddings
+        )
+        return vectorstore
 
 
-# TODO: Find appropriate model on huggingface for RAG based on corpus extracted from pdfs
+
+
 
 if __name__ == "__main__":
     db = Database()
@@ -111,6 +103,12 @@ if __name__ == "__main__":
     # db.connect_to_db(persistent=True)
     # db.write_to_db(corpus)
     # db.read_db()
-    # db.query("I enjoy ERDiagrams, they are fun to make, especially when they use the union operator")
+    # db.query("nosql, sql, chroma, chromadb, vectors")
 
+    vectorstore = db.create_vectorstore()
+    print("\n")
+    retriever = vectorstore.as_retriever(
+        search_type="mmr", search_kwargs={"k": 5, "fetch_k": 5}
+    )
+    print(retriever.invoke("Tell me something about nosql"))
 
