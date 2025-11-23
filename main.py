@@ -1,22 +1,17 @@
 import os
 
 import chromadb
-import langchain_chroma
 import pymupdf
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 
-from langchain_chroma import Chroma
-from langchain_core.prompts import PromptTemplate
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_huggingface.llms import HuggingFacePipeline
-
 
 class Build_Corpus:
-    def __find_files(self, path: str) -> list:
+    def __find_files(self, path: str) -> list[str]:
         """Returns a list of files in the given path"""
+
         return os.listdir(path)
 
-    def __read_pdf(self, document: str) -> list:
+    def __read_pdf(self, document: str) -> list[str] | None:
         """
         Attempts to read a given path/to/document,
         and returns the content of the given doc to the best of its abilities
@@ -29,25 +24,27 @@ class Build_Corpus:
             return doc
         except Exception:
             print(Exception)
-            return list()
 
-    def extract(self, path: str) -> list:
+    def extract(self, path: str) -> list[tuple[str, str, str]]:
         """
         Reads files in a given path
-        Returns a list of tuples: (filename-page_number: str, text: str, filename: str)
+        Returns a list of tuples:
+            (filename-page_number: str, text: str, filename: str)
         """
         corpus = list()
         files = self.__find_files(path)
         for file in files:
             filename, _ = os.path.splitext(file)
-            text = self.__read_pdf(path+file)
+            text = self.__read_pdf(path + file)
             for page_number, page in enumerate(text):
+                if len(page.strip()) == 0:
+                    continue
                 corpus.append((f"{filename}-{page_number}", page, filename))
         return corpus
 
 
 class Database:
-    def collect_data(self, path: str = "./data/") -> list:
+    def collect_data(self, path: str = "./data/") -> list[tuple[str, str, str]]:
         """Extracts corpus from files to database"""
         extractor = Build_Corpus()
         corpus = extractor.extract(path=path)
@@ -65,13 +62,14 @@ class Database:
         else:
             self.client = chromadb.Client()
 
-    def write_to_db(self, corpus: list, name: str = "my_collection") -> None: 
+    def write_to_db(
+        self, corpus: list[tuple[str, str, str]], name: str = "my_collection"
+    ) -> None:
         """
         Writes to collection, and inserts corpus
         Does not overwrite existing collection
-        Parameters: 
+        Parameters:
             corpus: list
-                Expects a list of tuples containing three values in the following order:
                 filename-page_number: str used as id in the collection
                 text: str content used to create embeddings
                 filename: list can be used to filter queries
@@ -80,40 +78,40 @@ class Database:
         file, text, filename = zip(*corpus)
         self.collection = self.client.get_or_create_collection(name=name)
         self.collection.upsert(
-            ids = list(file),
+            ids=list(file),
             documents=list(text),
-            metadatas = [{"filename": str(name)} for name in filename]
+            metadatas=[{"filename": str(name)} for name in filename],
         )
 
     def read_db(self, name: str = "my_collection") -> None:
         """Reads content of persistent collection"""
         self.collection = self.client.get_collection(name=name)
-        
-    def create_vectorstore(self, name: str = "my_collection", path: str = "./chroma") -> Chroma:
-        """Create vectorstore for  LLM"""
-        embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-        vectorstore = Chroma(
-            collection_name=name,
-            persist_directory=path,
-            embedding_function=embeddings
-        )
-        return vectorstore
+
+    def query(self, query: str, n_results: int = 5) -> list:
+        """Returns the most relevant content in a list"""
+        results = self.collection.query(query_texts=list(query), n_results=n_results)
+        ids_res = results["ids"][0]
+        dists = results["distances"][0]
+        docs_res = results["documents"][0]
+        metas = results["metadatas"][0]
+        return docs_res
 
 
 class LLM:
-    def __init__(self, model_id: str, vectorstore: Chroma) -> None:
+    def __init__(self, model_id: str, db: Database) -> None:
         """
         Installs local LLM and builds pipeline
         Expects two parameters:
             model_id: str -> model name from huggingface
-            vectorstore: Chroma -> vectorstore from db
+            db: Database-> Database class to enable prompting Chroma
         """
-        self.retrieve= vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 5, "fetch_k": 50})
+        self.query = db.query
         model_id = model_id
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = AutoModelForCausalLM.from_pretrained(model_id)
-        pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, max_new_tokens=200)
-        self.hf = HuggingFacePipeline(pipeline=pipe)
+        self.pipe = pipeline(
+            "text-generation", model=model, tokenizer=tokenizer, max_new_tokens=200
+        )
 
     def prompt(self, question: str) -> None:
         """
@@ -122,19 +120,19 @@ class LLM:
         """
         template = f"Question: {question}\n\n"
         context = self.get_context(question)
-        prompt = PromptTemplate.from_template(template+context)
-        chain = prompt | self.hf
-        print(chain.invoke({"question": question}))
+        prompt = template + context
+        answer = self.pipe(prompt)
+        print(answer[0]["generated_text"])
 
     def get_context(self, question: str) -> str:
-        """use vectorstore to retrieve additional context for prompt"""
-        retrieved_docs = self.retrieve.invoke(question)
-        docs_content = "\n\n".join(doc.page_content for doc in retrieved_docs)
+        """use self.query from db.query to retrieve additional context for prompt"""
+        retrieved_docs = self.query(question)
+        docs_content = "\n\n".join(doc for doc in retrieved_docs)
         system_prompt = (
-        "Use the given context to answer the question.\n"
-        "If you don't know the answer, say you don't know.\n"
-        "Use three sentence maximum and keep the answer concise.\n"
-        f"Context: {docs_content}"
+            "Use the given context to answer the original given question.\n"
+            "Do NOT generate new questions."
+            "Use three sentences maximum and keep the answer concise.\n"
+            f"Context: {docs_content}"
         )
         return system_prompt
 
@@ -142,11 +140,10 @@ class LLM:
 if __name__ == "__main__":
     db = Database()
     # corpus = db.collect_data()
-    # db.connect_to_db(persistent=True)
+    db.connect_to_db(persistent=True)
     # db.write_to_db(corpus)
-    # db.read_db()
+    db.read_db()
+    # db.query("ER diagram", n_results=10)
 
-    vectorstore = db.create_vectorstore()
-    llm = LLM("Qwen/Qwen3-0.6B", vectorstore=vectorstore)
+    llm = LLM("Qwen/Qwen3-0.6B", db=db)
     llm.prompt("What is nosql?")
-
