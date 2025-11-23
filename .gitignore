@@ -1,2 +1,5 @@
 data/
 bot/
+__*
+*.txt
+chroma/
