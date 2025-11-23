@@ -1,17 +1,20 @@
 import os
+from typing import Literal
 
 import chromadb
+import keyword_spacy
 import pymupdf
+import spacy
+import wikipedia
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 
 
 class Build_Corpus:
     def __find_files(self, path: str) -> list[str]:
         """Returns a list of files in the given path"""
-
         return os.listdir(path)
 
-    def __read_pdf(self, document: str) -> list[str] | None:
+    def __read_pdf(self, document: str) -> list[str]:
         """
         Attempts to read a given path/to/document,
         and returns the content of the given doc to the best of its abilities
@@ -19,11 +22,15 @@ class Build_Corpus:
         try:
             reader = pymupdf.open(document)
             doc = list()
+
             for page in reader:
                 doc.append(page.get_text())
+
             return doc
-        except Exception:
-            print(Exception)
+
+        except Exception as e:
+            print(e)
+            return list()
 
     def extract(self, path: str) -> list[tuple[str, str, str]]:
         """
@@ -33,13 +40,16 @@ class Build_Corpus:
         """
         corpus = list()
         files = self.__find_files(path)
+
         for file in files:
             filename, _ = os.path.splitext(file)
             text = self.__read_pdf(path + file)
+
             for page_number, page in enumerate(text):
                 if len(page.strip()) == 0:
                     continue
                 corpus.append((f"{filename}-{page_number}", page, filename))
+
         return corpus
 
 
@@ -59,6 +69,7 @@ class Database:
         """
         if persistent:
             self.client = chromadb.PersistentClient(path=path)
+
         else:
             self.client = chromadb.Client()
 
@@ -97,6 +108,51 @@ class Database:
         return docs_res
 
 
+class Wiki:
+    """Searches Wikipedia for keywords extracted from question"""
+
+    # WARNING: Requires: python -m spacy download en_core_web_md
+    def __extract_keywords(self, question: str, count: int) -> list:
+        """Uses Keyword spaCy to extract keywords from question"""
+        try:
+            nlp = spacy.load("en_core_web_md")
+            nlp.add_pipe(
+                "keyword_extractor",
+                last=True,
+                config={"top_n": count, "min_ngram": 1, "max_ngram": 3, "strict": True},
+            )
+            doc = nlp(question)
+            return doc._.keywords
+
+        except Exception as e:
+            print(e)
+            return list()
+
+    def search(
+        self, question: str, count: int = 3, sentences: int = 5, article_count: int = 2
+    ) -> list:
+        """Searches wikipedia for keywords"""
+        context = list()
+        if question.strip():
+            keywords = self.__extract_keywords(question, count)
+
+            for keyword in keywords:
+                searchterm = keyword[0]
+                articles = wikipedia.search(searchterm)[:article_count]
+
+                for article in articles:
+                    summary = wikipedia.summary(
+                        article, sentences=sentences, auto_suggest=False
+                    )
+                    context.append(summary)
+
+            return context
+
+        else:
+            print("No question found")
+            return list()
+
+
 class LLM:
     def __init__(self, model_id: str, db: Database) -> None:
         """
@@ -113,28 +169,50 @@ class LLM:
             "text-generation", model=model, tokenizer=tokenizer, max_new_tokens=200
         )
 
-    def prompt(self, question: str) -> None:
+    def prompt(
+        self,
+        question: str,
+        source: Literal["database", "wikipedia", "no_context"] = "database",
+    ) -> None:
         """
         Expects question: str which is prompted to LLM
         Calls on get_context which is appended to prompt
         """
         template = f"Question: {question}\n\n"
-        context = self.get_context(question)
-        prompt = template + context
+
+        if source == "no_context":
+            prompt = template
+
+        else:
+            context = self.__get_context(question, source)
+            prompt = template + context
+
         answer = self.pipe(prompt)
         print(answer[0]["generated_text"])
 
-    def get_context(self, question: str) -> str:
-        """use self.query from db.query to retrieve additional context for prompt"""
-        retrieved_docs = self.query(question)
+    def __get_context(
+        self, question: str, source: Literal["database", "wikipedia"]
+    ) -> str:
+        """Query given source to retrieve additional context for prompt"""
+        match source:
+            case "database":
+                retrieved_docs = self.query(question)
+            case "wikipedia":
+                retrieved_docs = self.__wikipedia(question)
+
         docs_content = "\n\n".join(doc for doc in retrieved_docs)
         system_prompt = (
             "Use the given context to answer the original given question.\n"
-            "Do NOT generate new questions."
+            "Do NOT generate new questions.\n"
             "Use three sentences maximum and keep the answer concise.\n"
             f"Context: {docs_content}"
         )
         return system_prompt
+
+    def __wikipedia(self, question: str) -> list:
+        """Searches Wikipedia for keywords found in question"""
+        wiki = Wiki()
+        return wiki.search(question)
 
 
 if __name__ == "__main__":
@@ -145,5 +223,8 @@ if __name__ == "__main__":
     db.read_db()
     # db.query("ER diagram", n_results=10)
 
+    # wiki = Wiki()
+    # wiki.search(question="What is NoSQL?")
+
     llm = LLM("Qwen/Qwen3-0.6B", db=db)
-    llm.prompt("What is nosql?")
+    llm.prompt("What is NoSQL?", "database")

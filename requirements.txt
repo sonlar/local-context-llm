@@ -3,3 +3,6 @@ PyMuPDF
 transformers
 torch
 accelerate
+wikipedia
+spacy
+keyword-spacy
