@@ -10,6 +10,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 
 
 class Build_Corpus:
+    """Builds corpus for chromadb from local files"""
+
     def __find_files(self, path: str) -> list[str]:
         """Returns a list of files in the given path"""
         return os.listdir(path)
@@ -21,29 +23,27 @@ class Build_Corpus:
         """
         try:
             reader = pymupdf.open(document)
-            doc = list()
-
-            for page in reader:
-                doc.append(page.get_text())
-
-            return doc
-
         except Exception as e:
             print(e)
             return list()
+        else:
+            doc = list()
+            for page in reader:
+                doc.append(page.get_text())
+            return doc
 
     def extract(self, path: str) -> list[tuple[str, str, str]]:
         """
         Reads files in a given path
-        Returns a list of tuples:
-            (filename-page_number: str, text: str, filename: str)
+        Returns a list of tuples containing 3 string values
         """
         corpus = list()
         files = self.__find_files(path)
 
         for file in files:
             filename, _ = os.path.splitext(file)
-            text = self.__read_pdf(path + file)
+            location = os.path.join(path, file)
+            text = self.__read_pdf(location)
 
             for page_number, page in enumerate(text):
                 if len(page.strip()) == 0:
@@ -54,6 +54,8 @@ class Build_Corpus:
 
 
 class Database:
+    """Implements chromadb and creates methods for basic functionality"""
+
     def collect_data(self, path: str = "./data/") -> list[tuple[str, str, str]]:
         """Extracts corpus from files to database"""
         extractor = Build_Corpus()
@@ -64,7 +66,7 @@ class Database:
         """
         Attempts to create or connect to database.
         Has two parameters: persistent: bool, path: str
-        persistent determines if the db is only in memory(False) or saved to disk
+        persistent determines if the db is only in memory(False) or saved to disk(True)
         path only matters if persistent
         """
         if persistent:
@@ -86,17 +88,24 @@ class Database:
                 filename: list can be used to filter queries
             name: str name of collection we are creating/writing to
         """
-        file, text, filename = zip(*corpus)
-        self.collection = self.client.get_or_create_collection(name=name)
-        self.collection.upsert(
-            ids=list(file),
-            documents=list(text),
-            metadatas=[{"filename": str(name)} for name in filename],
-        )
+        try:
+            file, text, filename = zip(*corpus)
+        except Exception as e:
+            print(e)
+        else:
+            self.collection = self.client.get_or_create_collection(name=name)
+            self.collection.upsert(
+                ids=list(file),
+                documents=list(text),
+                metadatas=[{"filename": str(fname)} for fname in filename],
+            )
 
     def read_db(self, name: str = "my_collection") -> None:
         """Reads content of persistent collection"""
-        self.collection = self.client.get_collection(name=name)
+        try:
+            self.collection = self.client.get_collection(name=name)
+        except Exception as e:
+            print(e)
 
     def query(self, query: str, n_results: int = 5) -> list:
         """Returns the most relevant content in a list"""
@@ -108,36 +117,46 @@ class Database:
         return docs_res
 
 
+# WARNING: Requires: python -m spacy download en_core_web_md
 class Wiki:
     """Searches Wikipedia for keywords extracted from question"""
 
-    # WARNING: Requires: python -m spacy download en_core_web_md
-    def __extract_keywords(self, question: str, count: int) -> list:
-        """Uses Keyword spaCy to extract keywords from question"""
+    def __init__(self, keyword_count: int):
+        """Attempts to load spacy pipeline and implement keyword extractor"""
         try:
-            nlp = spacy.load("en_core_web_md")
-            nlp.add_pipe(
+            self.nlp = spacy.load("en_core_web_md")
+        except Exception as e:
+            print(e)
+            print("WARNING: Requires: python -m spacy download en_core_web_md")
+        else:
+            self.nlp.add_pipe(
                 "keyword_extractor",
                 last=True,
-                config={"top_n": count, "min_ngram": 1, "max_ngram": 3, "strict": True},
+                config={
+                    "top_n": keyword_count,
+                    "min_ngram": 1,
+                    "max_ngram": 3,
+                    "strict": True,
+                },
             )
-            doc = nlp(question)
-            return doc._.keywords
 
+    def __extract_keywords(self, question: str) -> list:
+        """Uses Keyword spaCy to extract keywords from question"""
+        try:
+            doc = self.nlp(question)
+            return doc._.keywords
         except Exception as e:
             print(e)
             return list()
 
-    def search(
-        self, question: str, count: int = 3, sentences: int = 5, article_count: int = 2
-    ) -> list:
+    def search(self, question: str, sentences: int = 5, article_count: int = 2) -> list:
         """Searches wikipedia for keywords"""
         context = list()
         if not question.strip():
             print("No question found")
             return list()
 
-        keywords = self.__extract_keywords(question, count)
+        keywords = self.__extract_keywords(question)
         for keyword in keywords:
             searchterm = keyword[0]
             articles = wikipedia.search(searchterm)[:article_count]
@@ -152,7 +171,9 @@ class Wiki:
 
 
 class LLM:
-    def __init__(self, model_id: str, db: Database) -> None:
+    """RAG LLM"""
+
+    def __init__(self, model_id: str, db: Database, token_count: int = 200) -> None:
         """
         Installs local LLM and builds pipeline
         Expects two parameters:
@@ -160,11 +181,16 @@ class LLM:
             db: Database-> Database class to enable prompting Chroma
         """
         self.query = db.query
-        model_id = model_id
+        self.wiki = Wiki(keyword_count=1)
+        self.token_count = token_count
+
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = AutoModelForCausalLM.from_pretrained(model_id)
         self.pipe = pipeline(
-            "text-generation", model=model, tokenizer=tokenizer, max_new_tokens=200
+            "text-generation",
+            model=model,
+            tokenizer=tokenizer,
+            max_new_tokens=self.token_count,
         )
 
     def prompt(
@@ -203,6 +229,7 @@ class LLM:
             "Use the given context to answer the original given question.\n"
             "Do NOT generate new questions.\n"
             "Use three sentences maximum and keep the answer concise.\n"
+            f"You are limited to {self.token_count} tokens.\n"
             f"Context: {docs_content}\n\n"
             "Answer: "
         )
@@ -210,13 +237,12 @@ class LLM:
 
     def __wikipedia(self, question: str) -> list:
         """Searches Wikipedia for keywords found in question"""
-        wiki = Wiki()
-        return wiki.search(question)
+        return self.wiki.search(question)
 
 
 if __name__ == "__main__":
     db = Database()
-    corpus = db.collect_data()
+    corpus = db.collect_data(path="./data")
     db.connect_to_db(persistent=False)
     db.write_to_db(corpus)
     db.read_db()
