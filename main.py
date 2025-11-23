@@ -133,24 +133,22 @@ class Wiki:
     ) -> list:
         """Searches wikipedia for keywords"""
         context = list()
-        if question.strip():
-            keywords = self.__extract_keywords(question, count)
-
-            for keyword in keywords:
-                searchterm = keyword[0]
-                articles = wikipedia.search(searchterm)[:article_count]
-
-                for article in articles:
-                    summary = wikipedia.summary(
-                        article, sentences=sentences, auto_suggest=False
-                    )
-                    context.append(summary)
-
-            return context
-
-        else:
+        if not question.strip():
             print("No question found")
             return list()
+
+        keywords = self.__extract_keywords(question, count)
+        for keyword in keywords:
+            searchterm = keyword[0]
+            articles = wikipedia.search(searchterm)[:article_count]
+
+            for article in articles:
+                summary = wikipedia.summary(
+                    article, sentences=sentences, auto_suggest=False
+                )
+                context.append(summary)
+
+        return context
 
 
 class LLM:
