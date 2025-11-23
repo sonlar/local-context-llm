@@ -205,7 +205,8 @@ class LLM:
             "Use the given context to answer the original given question.\n"
             "Do NOT generate new questions.\n"
             "Use three sentences maximum and keep the answer concise.\n"
-            f"Context: {docs_content}"
+            f"Context: {docs_content}\n\n"
+            "Answer: "
         )
         return system_prompt
 
@@ -217,9 +218,9 @@ class LLM:
 
 if __name__ == "__main__":
     db = Database()
-    # corpus = db.collect_data()
-    db.connect_to_db(persistent=True)
-    # db.write_to_db(corpus)
+    corpus = db.collect_data()
+    db.connect_to_db(persistent=False)
+    db.write_to_db(corpus)
     db.read_db()
     # db.query("ER diagram", n_results=10)
 
@@ -227,4 +228,11 @@ if __name__ == "__main__":
     # wiki.search(question="What is NoSQL?")
 
     llm = LLM("Qwen/Qwen3-0.6B", db=db)
+    print("\nThe following question is answered using database\n")
     llm.prompt("What is NoSQL?", "database")
+
+    print("\nThe following question is answered using wikipedia\n")
+    llm.prompt("What is NoSQL?", "wikipedia")
+
+    print("\nThe following question is answered using no context\n")
+    llm.prompt("What is NoSQL?", "no_context")
